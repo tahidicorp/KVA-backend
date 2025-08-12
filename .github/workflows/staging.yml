@@ -1,0 +1,80 @@
+
+name: Staging CI (lint, test, auto-merge)
+
+on:
+  pull_request:
+    branches: ["staging"]
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  quality:
+    name: Lint, Format Check, Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier (check only)
+        run: npm run format:check
+
+      - name: Tests
+        run: npm test
+
+  automerge:
+    name: Auto-merge PR -> staging, then sync to main
+    needs: quality
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.draft == false }}
+    steps:
+      - name: Enable auto-merge for this PR
+        uses: peter-evans/enable-pull-request-automerge@v4
+        with:
+          pull-request-number: ${{ github.event.number }}
+          merge-method: squash
+
+      - name: Merge this PR now that checks passed
+        uses: peter-evans/merge-pull-request@v3
+        with:
+          pull-request: ${{ github.event.pull_request.html_url }}
+          merge-method: squash
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create/Update PR from staging -> main
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: staging-to-main
+          base: main
+          title: "Sync staging -> main"
+          body: |
+            Automated PR to bring `main` up to date with `staging` after successful checks.
+          commit-message: "chore(ci): sync staging -> main"
+          delete-branch: true
+
+      - name: Enable auto-merge on staging->main PR
+        uses: peter-evans/enable-pull-request-automerge@v4
+        with:
+          pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
+          merge-method: squash
